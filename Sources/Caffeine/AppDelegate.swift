@@ -9,6 +9,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var isActive: Bool { caffeinate?.isRunning ?? false }
 
+    private var iconStyle: IconStyle {
+        get { IconStyle(rawValue: UserDefaults.standard.string(forKey: "iconStyle") ?? "") ?? .energyDrink }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: "iconStyle")
+            iconView.style = newValue
+        }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: 32)
         statusItem.button?.action = #selector(handleClick)
@@ -18,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let button = statusItem.button {
             iconView = CoffeeIconView(frame: button.bounds)
             iconView.autoresizingMask = [.width, .height]
+            iconView.style = iconStyle
             button.addSubview(iconView)
         }
         updateIcon(animated: false)
@@ -79,31 +88,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showMenu() {
         let menu = NSMenu()
+        menu.autoenablesItems = false
 
-        // Active Status Header
-        let statusTitle: String
+        // Status header — custom view instead of a plain disabled text item.
+        let headerItem = NSMenuItem()
+        headerItem.isEnabled = false
+        let header = StatusHeaderView(frame: NSRect(x: 0, y: 0, width: 230, height: 40))
+        let detail: String
         if isActive, let start = activeStartDate {
-            let elapsed = Int(Date().timeIntervalSince(start))
-            statusTitle = "☕ Caffeine: Active (\(formatDuration(elapsed)))"
+            detail = "Active for \(formatDuration(Int(Date().timeIntervalSince(start))))"
         } else {
-            statusTitle = "☕ Caffeine: Inactive"
+            detail = "Currently inactive"
         }
-        let statusItem = NSMenuItem(title: statusTitle, action: nil, keyEquivalent: "")
-        statusItem.isEnabled = false
-        menu.addItem(statusItem)
+        header.configure(title: "Caffeine", detail: detail, dotColor: isActive ? .systemGreen : .tertiaryLabelColor)
+        headerItem.view = header
+        menu.addItem(headerItem)
 
         menu.addItem(NSMenuItem.separator())
 
-        // Get a Red Bull
-        let redBullItem = NSMenuItem(title: "Get a Red Bull", action: nil, keyEquivalent: "")
-        redBullItem.submenu = redBullMenu()
-        menu.addItem(redBullItem)
+        // Get an Energy Drink / Get a Coffee
+        let energyItem = NSMenuItem(title: "Get an Energy Drink", action: nil, keyEquivalent: "")
+        energyItem.image = symbolImage("bolt.fill")
+        energyItem.submenu = energyDrinkMenu()
+        menu.addItem(energyItem)
+
+        let coffeeItem = NSMenuItem(title: "Get a Coffee", action: nil, keyEquivalent: "")
+        coffeeItem.image = symbolImage("cup.and.saucer.fill")
+        coffeeItem.submenu = coffeeMenu()
+        menu.addItem(coffeeItem)
 
         menu.addItem(NSMenuItem.separator())
+
+        // Icon Style
+        let styleItem = NSMenuItem(title: "Icon Style", action: nil, keyEquivalent: "")
+        styleItem.image = symbolImage("paintbrush.fill")
+        styleItem.submenu = iconStyleMenu()
+        menu.addItem(styleItem)
 
         // Launch at Login Toggle
         let loginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         loginItem.target = self
+        loginItem.image = symbolImage("power")
         if #available(macOS 13.0, *) {
             loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
         }
@@ -113,6 +138,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Quit
         let quitItem = NSMenuItem(title: "Quit Caffeine", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        quitItem.image = symbolImage("xmark.circle")
         menu.addItem(quitItem)
 
         self.statusItem.menu = menu
@@ -120,69 +146,107 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.statusItem.menu = nil
     }
 
-    // MARK: - Get a Red Bull
-
-    /// Search-only destinations — no checkout automation, no order placement.
-    /// DoorDash/Instacart don't publish a stable search API; these are
-    /// best-effort URL patterns captured by hand and may break if either
-    /// site changes its URL structure.
-    private struct RedBullDestination {
-        let title: String
-        let url: () -> URL?
+    private func symbolImage(_ name: String) -> NSImage? {
+        let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .medium)
+        let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(config)
+        image?.isTemplate = true
+        return image
     }
 
-    private var redBullDestinations: [RedBullDestination] {
-        [
-            // Maps searches for places/businesses, not products — "Red Bull" as a query
-            // returns nothing useful. Search broadly across the store types that
-            // typically carry it, since a single query can't express a real category OR.
-            RedBullDestination(title: "Nearby Stores (Apple Maps)") {
-                var components = URLComponents(string: "maps://")!
-                components.queryItems = [URLQueryItem(name: "q", value: "gas station OR convenience store OR grocery store")]
-                return components.url
-            },
-            RedBullDestination(title: "Nearby Stores (Google Maps)") {
-                var components = URLComponents(string: "https://www.google.com/maps/search/")!
-                components.queryItems = [
-                    URLQueryItem(name: "api", value: "1"),
-                    URLQueryItem(name: "query", value: "gas station OR convenience store OR grocery store near me"),
-                ]
-                return components.url
-            },
-            RedBullDestination(title: "Find on DoorDash") {
-                var components = URLComponents()
-                components.scheme = "https"
-                components.host = "www.doordash.com"
-                components.path = "/search/store/red bull/"
-                return components.url
-            },
-            RedBullDestination(title: "Find on Instacart") {
-                var components = URLComponents(string: "https://www.instacart.com/store/s")!
-                components.queryItems = [URLQueryItem(name: "k", value: "red bull")]
-                return components.url
-            },
-        ]
-    }
+    // MARK: - Icon Style
 
-    private func redBullMenu() -> NSMenu {
+    private func iconStyleMenu() -> NSMenu {
         let menu = NSMenu()
-        let destinations = redBullDestinations
 
-        for (index, destination) in destinations.enumerated() {
-            let item = NSMenuItem(title: destination.title, action: #selector(openRedBullDestination(_:)), keyEquivalent: "")
-            item.target = self
-            item.tag = index
+        let coffeeItem = NSMenuItem(title: "Coffee", action: #selector(selectIconStyle(_:)), keyEquivalent: "")
+        coffeeItem.target = self
+        coffeeItem.tag = 0
+        coffeeItem.image = symbolImage("cup.and.saucer.fill")
+        coffeeItem.state = iconStyle == .coffee ? .on : .off
+        menu.addItem(coffeeItem)
+
+        let energyItem = NSMenuItem(title: "Energy Drink", action: #selector(selectIconStyle(_:)), keyEquivalent: "")
+        energyItem.target = self
+        energyItem.tag = 1
+        energyItem.image = symbolImage("bolt.fill")
+        energyItem.state = iconStyle == .energyDrink ? .on : .off
+        menu.addItem(energyItem)
+
+        return menu
+    }
+
+    @objc private func selectIconStyle(_ sender: NSMenuItem) {
+        iconStyle = sender.tag == 0 ? .coffee : .energyDrink
+    }
+
+    // MARK: - Get a Drink
+
+    /// Brands shown under "Get an Energy Drink" — each opens its own destination submenu.
+    private let energyDrinkBrands = ["Red Bull", "Monster Energy", "Celsius", "Bang Energy", "Rockstar Energy"]
+
+    private func energyDrinkMenu() -> NSMenu {
+        let menu = NSMenu()
+        for brand in energyDrinkBrands {
+            let item = NSMenuItem(title: brand, action: nil, keyEquivalent: "")
+            item.submenu = destinationMenu(
+                mapQuery: "gas station OR convenience store OR grocery store",
+                searchTerm: brand.lowercased()
+            )
             menu.addItem(item)
-            if index == 1 {
-                menu.addItem(NSMenuItem.separator())
-            }
         }
         return menu
     }
 
-    @objc private func openRedBullDestination(_ sender: NSMenuItem) {
-        let destinations = redBullDestinations
-        guard destinations.indices.contains(sender.tag), let url = destinations[sender.tag].url() else { return }
+    private func coffeeMenu() -> NSMenu {
+        destinationMenu(mapQuery: "coffee shop", searchTerm: "coffee")
+    }
+
+    /// Search-only destinations — no checkout automation, no order placement.
+    /// DoorDash/Instacart don't publish a stable search API; these are
+    /// best-effort URL patterns captured by hand and may break if either
+    /// site changes its URL structure. Maps searches places, not products, so
+    /// `mapQuery` targets the kind of store that carries the drink rather than
+    /// the drink itself.
+    private func destinationMenu(mapQuery: String, searchTerm: String) -> NSMenu {
+        let menu = NSMenu()
+
+        func addItem(_ title: String, symbol: String, url: URL?) {
+            let item = NSMenuItem(title: title, action: #selector(openDestination(_:)), keyEquivalent: "")
+            item.target = self
+            item.image = symbolImage(symbol)
+            item.representedObject = url
+            item.isEnabled = url != nil
+            menu.addItem(item)
+        }
+
+        var appleMaps = URLComponents(string: "maps://")!
+        appleMaps.queryItems = [URLQueryItem(name: "q", value: mapQuery)]
+        addItem("Nearby Stores (Apple Maps)", symbol: "map.fill", url: appleMaps.url)
+
+        var googleMaps = URLComponents(string: "https://www.google.com/maps/search/")!
+        googleMaps.queryItems = [
+            URLQueryItem(name: "api", value: "1"),
+            URLQueryItem(name: "query", value: "\(mapQuery) near me"),
+        ]
+        addItem("Nearby Stores (Google Maps)", symbol: "map", url: googleMaps.url)
+
+        menu.addItem(.separator())
+
+        var doorDash = URLComponents()
+        doorDash.scheme = "https"
+        doorDash.host = "www.doordash.com"
+        doorDash.path = "/search/store/\(searchTerm)/"
+        addItem("Find on DoorDash", symbol: "bag.fill", url: doorDash.url)
+
+        var instacart = URLComponents(string: "https://www.instacart.com/store/s")!
+        instacart.queryItems = [URLQueryItem(name: "k", value: searchTerm)]
+        addItem("Find on Instacart", symbol: "cart", url: instacart.url)
+
+        return menu
+    }
+
+    @objc private func openDestination(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
         NSWorkspace.shared.open(url)
     }
 
