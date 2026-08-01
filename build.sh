@@ -1,21 +1,41 @@
 #!/bin/bash
-# Builds Caffeine.app. Pass --install to copy it into /Applications.
+# Builds Caffeine.app via an Xcode project (xcodegen + xcodebuild) so the app gets
+# a real code signature. On macOS 26, ad-hoc-signed apps get silently denied a real
+# menu bar status-item slot even though they launch and run fine.
+# Pass --install to copy the result into /Applications.
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
-APP=".build/Caffeine.app"
+if ! command -v xcodegen >/dev/null; then
+	echo "xcodegen is required: brew install xcodegen" >&2
+	exit 1
+fi
 
-swift build -c release --arch arm64 --arch x86_64
+DERIVED_DATA=".build/xcode"
+APP="$DERIVED_DATA/Build/Products/Release/Caffeine.app"
 
-rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp Resources/Info.plist "$APP/Contents/Info.plist"
+xcodegen generate
+xcodebuild -project Caffeine.xcodeproj -scheme Caffeine -configuration Release -derivedDataPath "$DERIVED_DATA" build
+
+# xcodegen doesn't wire up a Copy Bundle Resources phase for these, so add them
+# manually and re-sign (any change to a signed bundle invalidates its signature).
+mkdir -p "$APP/Contents/Resources"
+for wings in Resources/Wings.*; do
+	[ -f "$wings" ] && cp "$wings" "$APP/Contents/Resources/"
+done
 if [ -f Resources/AppIcon.icns ]; then
 	cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 fi
-cp .build/apple/Products/Release/Caffeine "$APP/Contents/MacOS/Caffeine"
-codesign --force --sign - "$APP"
+
+SIGN_IDENTITY="$(security find-identity -v -p codesigning | grep -m1 'Apple Development' | sed -E 's/^[[:space:]]*[0-9]+\) ([A-F0-9]+) .*/\1/')"
+ENTITLEMENTS="$DERIVED_DATA/Build/Intermediates.noindex/Caffeine.build/Release/Caffeine.build/Caffeine.app.xcent"
+if [ -n "$SIGN_IDENTITY" ] && [ -f "$ENTITLEMENTS" ]; then
+	codesign --force --sign "$SIGN_IDENTITY" --entitlements "$ENTITLEMENTS" --timestamp=none "$APP"
+else
+	codesign --force --sign - "$APP"
+	echo "Warning: no Apple Development identity found; ad-hoc signing may not get a menu bar icon on macOS 26+." >&2
+fi
 
 echo "Built $PWD/$APP"
 
