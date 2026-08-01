@@ -21,9 +21,6 @@ xcodebuild -project Caffeine.xcodeproj -scheme Caffeine -configuration Release -
 # xcodegen doesn't wire up a Copy Bundle Resources phase for these, so add them
 # manually and re-sign (any change to a signed bundle invalidates its signature).
 mkdir -p "$APP/Contents/Resources"
-for wings in Resources/Wings.*; do
-	[ -f "$wings" ] && cp "$wings" "$APP/Contents/Resources/"
-done
 if [ -f Resources/AppIcon.icns ]; then
 	cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 fi

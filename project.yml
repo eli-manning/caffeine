@@ -9,7 +9,6 @@ targets:
     sources:
       - Sources/Caffeine
     resources:
-      - Resources/Wings.mp3
       - Resources/AppIcon.icns
     settings:
       base:
