@@ -1,31 +1,37 @@
 import AppKit
 import QuartzCore
 
-/// Draws the menu bar can: a plain monochrome outline when inactive, cross-fading
-/// to a colored can illustration when active, with wings that sprout and fold
-/// back in while the "gives you wiiings" clip plays.
+/// Which drink the menu bar icon (and its fill animation) currently represents.
+enum IconStyle: String {
+    case coffee
+    case energyDrink
+}
+
+/// Draws the menu bar icon for the current `style`: either a coffee cup with rising
+/// steam, or a Red Bull-style can that sprouts wings, while the underlying toggle
+/// behavior (and Info.plist identity) stays the same either way.
 final class CoffeeIconView: NSView {
     private let container = CALayer()
     private let outlineLayer = CALayer()
     private let fillLayer = CALayer()
+
     private let leftWing = CAShapeLayer()
     private let rightWing = CAShapeLayer()
+    private var steamWisps: [CAShapeLayer] = []
 
-    /// How long the wings stay out before folding back in, tuned to Wings.mp3's ~2.6s length.
+    /// How long the wings/steam stay out before folding back in.
     private let wingsHoldDuration: CFTimeInterval = 1.9
 
     private(set) var isFilled = false
 
-    /// "Gives you wiiings" clip played on fill. Drop a file named Wings.<ext> into
-    /// Resources/ (and have build.sh copy it) to enable this; silently does nothing without it.
-    private lazy var wingsSound: NSSound? = {
-        for ext in ["caf", "aiff", "m4a", "mp3", "wav"] {
-            if let path = Bundle.main.path(forResource: "Wings", ofType: ext) {
-                return NSSound(contentsOfFile: path, byReference: true)
-            }
+    var style: IconStyle = .energyDrink {
+        didSet {
+            guard style != oldValue else { return }
+            hideWingsImmediately()
+            stopSteamAnimation()
+            updateImages()
         }
-        return nil
-    }()
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -41,6 +47,7 @@ final class CoffeeIconView: NSView {
         layer?.addSublayer(container)
 
         setupWings()
+        setupSteamWisps()
         updateImages()
     }
 
@@ -56,6 +63,7 @@ final class CoffeeIconView: NSView {
         outlineLayer.frame = container.bounds
         fillLayer.frame = container.bounds
         positionWings()
+        positionSteamWisps()
         CATransaction.commit()
     }
 
@@ -76,15 +84,18 @@ final class CoffeeIconView: NSView {
         isFilled = filled
 
         if animated {
-            if filled {
-                wingsSound?.play()
-                playWingsSequence()
-            } else {
-                NSSound(named: "Bottle")?.play()
-                hideWingsImmediately()
+            // A single generic "charging" cue for turning on, regardless of icon
+            // style — no drink-specific jingle, just a quick power-up chime.
+            NSSound(named: filled ? "Hero" : "Bottle")?.play()
+            switch style {
+            case .energyDrink:
+                filled ? playWingsSequence() : hideWingsImmediately()
+            case .coffee:
+                filled ? startSteamAnimation() : stopSteamAnimation()
             }
         } else if !filled {
             hideWingsImmediately()
+            stopSteamAnimation()
         }
 
         guard animated else {
@@ -118,7 +129,7 @@ final class CoffeeIconView: NSView {
         container.add(pop, forKey: "pop")
     }
 
-    // MARK: - Wings
+    // MARK: - Wings (energy drink)
 
     private func setupWings() {
         for wing in [leftWing, rightWing] {
@@ -132,6 +143,7 @@ final class CoffeeIconView: NSView {
     }
 
     private func positionWings() {
+        guard style == .energyDrink else { return }
         let width = bounds.width
         let height = bounds.height
 
@@ -273,12 +285,90 @@ final class CoffeeIconView: NSView {
         }
     }
 
+    // MARK: - Steam (coffee)
+
+    private func setupSteamWisps() {
+        for _ in 0..<2 {
+            let wisp = CAShapeLayer()
+            wisp.fillColor = nil
+            wisp.lineWidth = 1.2
+            wisp.lineCap = .round
+            wisp.opacity = 0
+            container.addSublayer(wisp)
+            steamWisps.append(wisp)
+        }
+    }
+
+    private func positionSteamWisps() {
+        guard style == .coffee else { return }
+        let tint = currentTint().cgColor
+        let width = bounds.width
+        let height = bounds.height
+
+        for (index, wisp) in steamWisps.enumerated() {
+            wisp.strokeColor = tint
+            let xOffset: CGFloat = index == 0 ? width * 0.42 : width * 0.58
+            let startY = height * 0.65
+            let path = CGMutablePath()
+            let dx: CGFloat = index == 0 ? -1.5 : 1.5
+            path.move(to: CGPoint(x: xOffset, y: startY))
+            path.addCurve(
+                to: CGPoint(x: xOffset + dx, y: startY + 5),
+                control1: CGPoint(x: xOffset + dx * 1.5, y: startY + 1.8),
+                control2: CGPoint(x: xOffset, y: startY + 3.5)
+            )
+            wisp.path = path
+        }
+    }
+
+    private func startSteamAnimation() {
+        let duration: CFTimeInterval = 1.3
+
+        for (index, wisp) in steamWisps.enumerated() {
+            wisp.removeAllAnimations()
+            let delay = Double(index) * 0.35
+
+            let group = CAAnimationGroup()
+            group.duration = duration
+            group.repeatCount = 2
+            group.beginTime = CACurrentMediaTime() + delay
+
+            let rise = CABasicAnimation(keyPath: "transform.translation.y")
+            rise.fromValue = 0
+            rise.toValue = 4.0
+
+            let fade = CAKeyframeAnimation(keyPath: "opacity")
+            fade.values = [0, 0.65, 0.4, 0]
+            fade.keyTimes = [0, 0.25, 0.7, 1.0]
+
+            group.animations = [rise, fade]
+            group.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            wisp.add(group, forKey: "steam")
+        }
+    }
+
+    private func stopSteamAnimation() {
+        for wisp in steamWisps {
+            wisp.removeAllAnimations()
+            wisp.opacity = 0
+        }
+    }
+
     // MARK: - Appearance & Images
 
     private func updateImages() {
         let tint = currentTint()
-        outlineLayer.contents = canImage(tint: tint, filled: false)
-        fillLayer.contents = canImage(tint: tint, filled: true)
+        switch style {
+        case .energyDrink:
+            outlineLayer.contents = canImage(tint: tint, filled: false)
+            fillLayer.contents = canImage(tint: tint, filled: true)
+        case .coffee:
+            outlineLayer.contents = symbolImage("cup.and.saucer", tint: tint)
+            fillLayer.contents = symbolImage("cup.and.saucer.fill", tint: tint)
+        }
+        for wisp in steamWisps {
+            wisp.strokeColor = tint.cgColor
+        }
     }
 
     private func currentTint() -> NSColor {
@@ -287,6 +377,19 @@ final class CoffeeIconView: NSView {
             color = NSColor.labelColor.usingColorSpace(.deviceRGB) ?? .labelColor
         }
         return color
+    }
+
+    private func symbolImage(_ name: String, tint: NSColor) -> NSImage? {
+        let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
+        guard let base = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(config) else { return nil }
+
+        return NSImage(size: base.size, flipped: false) { rect in
+            base.draw(in: rect)
+            tint.set()
+            rect.fill(using: .sourceAtop)
+            return true
+        }
     }
 
     /// A drink-can silhouette — original artwork, not a reproduction of any real can's
