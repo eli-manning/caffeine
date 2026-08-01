@@ -94,6 +94,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
+        // Get a Red Bull
+        let redBullItem = NSMenuItem(title: "Get a Red Bull", action: nil, keyEquivalent: "")
+        redBullItem.submenu = redBullMenu()
+        menu.addItem(redBullItem)
+
+        menu.addItem(NSMenuItem.separator())
+
         // Launch at Login Toggle
         let loginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         loginItem.target = self
@@ -111,6 +118,72 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.statusItem.menu = menu
         self.statusItem.button?.performClick(nil)
         self.statusItem.menu = nil
+    }
+
+    // MARK: - Get a Red Bull
+
+    /// Search-only destinations — no checkout automation, no order placement.
+    /// DoorDash/Instacart don't publish a stable search API; these are
+    /// best-effort URL patterns captured by hand and may break if either
+    /// site changes its URL structure.
+    private struct RedBullDestination {
+        let title: String
+        let url: () -> URL?
+    }
+
+    private var redBullDestinations: [RedBullDestination] {
+        [
+            // Maps searches for places/businesses, not products — "Red Bull" as a query
+            // returns nothing useful. Search broadly across the store types that
+            // typically carry it, since a single query can't express a real category OR.
+            RedBullDestination(title: "Nearby Stores (Apple Maps)") {
+                var components = URLComponents(string: "maps://")!
+                components.queryItems = [URLQueryItem(name: "q", value: "gas station OR convenience store OR grocery store")]
+                return components.url
+            },
+            RedBullDestination(title: "Nearby Stores (Google Maps)") {
+                var components = URLComponents(string: "https://www.google.com/maps/search/")!
+                components.queryItems = [
+                    URLQueryItem(name: "api", value: "1"),
+                    URLQueryItem(name: "query", value: "gas station OR convenience store OR grocery store near me"),
+                ]
+                return components.url
+            },
+            RedBullDestination(title: "Find on DoorDash") {
+                var components = URLComponents()
+                components.scheme = "https"
+                components.host = "www.doordash.com"
+                components.path = "/search/store/red bull/"
+                return components.url
+            },
+            RedBullDestination(title: "Find on Instacart") {
+                var components = URLComponents(string: "https://www.instacart.com/store/s")!
+                components.queryItems = [URLQueryItem(name: "k", value: "red bull")]
+                return components.url
+            },
+        ]
+    }
+
+    private func redBullMenu() -> NSMenu {
+        let menu = NSMenu()
+        let destinations = redBullDestinations
+
+        for (index, destination) in destinations.enumerated() {
+            let item = NSMenuItem(title: destination.title, action: #selector(openRedBullDestination(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = index
+            menu.addItem(item)
+            if index == 1 {
+                menu.addItem(NSMenuItem.separator())
+            }
+        }
+        return menu
+    }
+
+    @objc private func openRedBullDestination(_ sender: NSMenuItem) {
+        let destinations = redBullDestinations
+        guard destinations.indices.contains(sender.tag), let url = destinations[sender.tag].url() else { return }
+        NSWorkspace.shared.open(url)
     }
 
     @objc private func toggleLaunchAtLogin() {
