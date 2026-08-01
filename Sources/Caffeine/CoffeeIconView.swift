@@ -1,21 +1,31 @@
 import AppKit
 import QuartzCore
 
-/// Draws the menu bar cup: an outline that is always visible, plus a filled cup
-/// revealed by a soft gradient mask that rises or drains like liquid.
+/// Draws the menu bar can: a plain monochrome outline when inactive, cross-fading
+/// to a colored can illustration when active, with wings that sprout and fold
+/// back in while the "gives you wiiings" clip plays.
 final class CoffeeIconView: NSView {
     private let container = CALayer()
     private let outlineLayer = CALayer()
     private let fillLayer = CALayer()
-    private let fillMask = CAGradientLayer()
-    private let steamContainer = CALayer()
-    private var steamWisps: [CAShapeLayer] = []
+    private let leftWing = CAShapeLayer()
+    private let rightWing = CAShapeLayer()
 
-    private let emptyLevel: CGFloat = -0.35
-    private let fullLevel: CGFloat = 1.05
-    private let bandHeight: CGFloat = 0.3
+    /// How long the wings stay out before folding back in, tuned to Wings.mp3's ~2.6s length.
+    private let wingsHoldDuration: CFTimeInterval = 1.9
 
     private(set) var isFilled = false
+
+    /// "Gives you wiiings" clip played on fill. Drop a file named Wings.<ext> into
+    /// Resources/ (and have build.sh copy it) to enable this; silently does nothing without it.
+    private lazy var wingsSound: NSSound? = {
+        for ext in ["caf", "aiff", "m4a", "mp3", "wav"] {
+            if let path = Bundle.main.path(forResource: "Wings", ofType: ext) {
+                return NSSound(contentsOfFile: path, byReference: true)
+            }
+        }
+        return nil
+    }()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -24,18 +34,13 @@ final class CoffeeIconView: NSView {
 
         outlineLayer.contentsGravity = .resizeAspect
         fillLayer.contentsGravity = .resizeAspect
-
-        fillMask.colors = [NSColor.white.cgColor, NSColor.clear.cgColor]
-        fillMask.startPoint = CGPoint(x: 0.5, y: emptyLevel)
-        fillMask.endPoint = CGPoint(x: 0.5, y: emptyLevel + bandHeight)
-        fillLayer.mask = fillMask
+        fillLayer.opacity = 0
 
         container.addSublayer(outlineLayer)
         container.addSublayer(fillLayer)
-        container.addSublayer(steamContainer)
         layer?.addSublayer(container)
 
-        setupSteamWisps()
+        setupWings()
         updateImages()
     }
 
@@ -50,9 +55,7 @@ final class CoffeeIconView: NSView {
         container.frame = bounds
         outlineLayer.frame = container.bounds
         fillLayer.frame = container.bounds
-        fillMask.frame = container.bounds
-        steamContainer.frame = container.bounds
-        positionSteamWisps()
+        positionWings()
         CATransaction.commit()
     }
 
@@ -72,42 +75,38 @@ final class CoffeeIconView: NSView {
         guard filled != isFilled || !animated else { return }
         isFilled = filled
 
-        let target = filled ? fullLevel : emptyLevel
-        let current = (fillMask.presentation() ?? fillMask).startPoint.y
-
         if animated {
-            NSSound(named: "Bottle")?.play()
-        }
-
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        fillMask.startPoint = CGPoint(x: 0.5, y: target)
-        fillMask.endPoint = CGPoint(x: 0.5, y: target + bandHeight)
-        CATransaction.commit()
-
-        if filled {
-            startSteamAnimation()
-        } else {
-            stopSteamAnimation()
+            if filled {
+                wingsSound?.play()
+                playWingsSequence()
+            } else {
+                NSSound(named: "Bottle")?.play()
+                hideWingsImmediately()
+            }
+        } else if !filled {
+            hideWingsImmediately()
         }
 
         guard animated else {
-            fillMask.removeAllAnimations()
+            outlineLayer.opacity = filled ? 0 : 1
+            fillLayer.opacity = filled ? 1 : 0
             return
         }
 
-        let timing = CAMediaTimingFunction(name: .easeInEaseOut)
-        let duration: CFTimeInterval = 0.45
+        let duration: CFTimeInterval = 0.35
+        let fadeOutline = CABasicAnimation(keyPath: "opacity")
+        fadeOutline.fromValue = outlineLayer.opacity
+        fadeOutline.toValue = filled ? 0 : 1
+        fadeOutline.duration = duration
+        outlineLayer.opacity = filled ? 0 : 1
+        outlineLayer.add(fadeOutline, forKey: "fade")
 
-        for key in ["startPoint", "endPoint"] {
-            let offset: CGFloat = key == "startPoint" ? 0 : bandHeight
-            let animation = CABasicAnimation(keyPath: key)
-            animation.fromValue = CGPoint(x: 0.5, y: current + offset)
-            animation.toValue = CGPoint(x: 0.5, y: target + offset)
-            animation.duration = duration
-            animation.timingFunction = timing
-            fillMask.add(animation, forKey: key)
-        }
+        let fadeFill = CABasicAnimation(keyPath: "opacity")
+        fadeFill.fromValue = fillLayer.opacity
+        fadeFill.toValue = filled ? 1 : 0
+        fadeFill.duration = duration
+        fillLayer.opacity = filled ? 1 : 0
+        fillLayer.add(fadeFill, forKey: "fade")
 
         let pop = CASpringAnimation(keyPath: "transform.scale")
         pop.fromValue = filled ? 0.82 : 1.12
@@ -119,71 +118,154 @@ final class CoffeeIconView: NSView {
         container.add(pop, forKey: "pop")
     }
 
-    // MARK: - Steam Wisps
+    // MARK: - Wings
 
-    private func setupSteamWisps() {
-        for _ in 0..<2 {
-            let wisp = CAShapeLayer()
-            wisp.fillColor = nil
-            wisp.lineWidth = 1.2
-            wisp.lineCap = .round
-            wisp.opacity = 0
-            steamContainer.addSublayer(wisp)
-            steamWisps.append(wisp)
+    private func setupWings() {
+        for wing in [leftWing, rightWing] {
+            wing.fillColor = NSColor.white.withAlphaComponent(0.95).cgColor
+            wing.strokeColor = NSColor(white: 0.6, alpha: 0.6).cgColor
+            wing.lineWidth = 0.4
+            wing.opacity = 0
+            wing.transform = CATransform3DMakeScale(0.001, 0.001, 1)
+            container.addSublayer(wing)
         }
     }
 
-    private func positionSteamWisps() {
-        let tint = currentTint().cgColor
+    private func positionWings() {
         let width = bounds.width
         let height = bounds.height
 
-        for (index, wisp) in steamWisps.enumerated() {
-            wisp.strokeColor = tint
-            let xOffset: CGFloat = index == 0 ? width * 0.42 : width * 0.58
-            let startY = height * 0.65
-            let path = CGMutablePath()
-            let dx: CGFloat = index == 0 ? -1.5 : 1.5
-            path.move(to: CGPoint(x: xOffset, y: startY))
-            path.addCurve(
-                to: CGPoint(x: xOffset + dx, y: startY + 5),
-                control1: CGPoint(x: xOffset + dx * 1.5, y: startY + 1.8),
-                control2: CGPoint(x: xOffset, y: startY + 3.5)
-            )
-            wisp.path = path
+        // canImage draws into a 16x20 canvas with resizeAspect, which letterboxes
+        // when the view's aspect ratio doesn't match — find where that canvas
+        // actually lands in view space so the wings line up with the can's edges.
+        let canvasAspect: CGFloat = 16.0 / 20.0
+        let containerAspect = width / height
+        let imageRect: CGRect
+        if containerAspect > canvasAspect {
+            let imageWidth = height * canvasAspect
+            imageRect = CGRect(x: (width - imageWidth) / 2, y: 0, width: imageWidth, height: height)
+        } else {
+            let imageHeight = width / canvasAspect
+            imageRect = CGRect(x: 0, y: (height - imageHeight) / 2, width: width, height: imageHeight)
+        }
+
+        // Matches the can body's left/right edges and shoulder height as drawn in canImage
+        // (bodyInset 3.0 of 16 wide; body spans y 0.8...17.4 of 20 tall).
+        let leftEdgeX = imageRect.minX + imageRect.width * 0.1875
+        let rightEdgeX = imageRect.minX + imageRect.width * 0.8125
+        let anchorY = imageRect.minY + imageRect.height * 0.54
+
+        leftWing.position = CGPoint(x: leftEdgeX, y: anchorY)
+        leftWing.bounds = CGRect(x: 0, y: 0, width: imageRect.width * 0.55, height: imageRect.height * 0.36)
+        leftWing.anchorPoint = CGPoint(x: 1.0, y: 0.5)
+        leftWing.path = wingPath(in: leftWing.bounds, flipped: false)
+
+        rightWing.position = CGPoint(x: rightEdgeX, y: anchorY)
+        rightWing.bounds = leftWing.bounds
+        rightWing.anchorPoint = CGPoint(x: 0.0, y: 0.5)
+        rightWing.path = wingPath(in: rightWing.bounds, flipped: true)
+    }
+
+    /// A single swept-back wing, tip at the trailing edge, root at x = flipped ? 0 : maxX.
+    private func wingPath(in rect: CGRect, flipped: Bool) -> CGPath {
+        let path = CGMutablePath()
+        let w = rect.width
+        let h = rect.height
+        let root = CGPoint(x: flipped ? 0 : w, y: h * 0.5)
+        let tip = CGPoint(x: flipped ? w : 0, y: h * 0.08)
+
+        path.move(to: root)
+        path.addCurve(
+            to: tip,
+            control1: CGPoint(x: flipped ? w * 0.35 : w * 0.65, y: h * 0.95),
+            control2: CGPoint(x: flipped ? w * 0.85 : w * 0.15, y: h * 0.55)
+        )
+        path.addCurve(
+            to: CGPoint(x: root.x, y: h * 0.35),
+            control1: CGPoint(x: flipped ? w * 0.5 : w * 0.5, y: h * 0.0),
+            control2: CGPoint(x: flipped ? w * 0.15 : w * 0.85, y: h * 0.18)
+        )
+        path.closeSubpath()
+        return path
+    }
+
+    private func playWingsSequence() {
+        let growDuration: CFTimeInterval = 0.3
+        let shrinkDuration: CFTimeInterval = 0.32
+
+        // Figure out how long the pop-in spring actually takes to settle so the flap
+        // stroke starts cleanly afterward, instead of fighting with the bounce.
+        let popInTemplate = CASpringAnimation(keyPath: "transform.scale")
+        popInTemplate.mass = 0.7
+        popInTemplate.stiffness = 180
+        popInTemplate.damping = 13
+        let settleDuration = popInTemplate.settlingDuration
+        let collapseDelay = settleDuration + 0.6 + wingsHoldDuration
+        let flapStartTime = CACurrentMediaTime() + settleDuration
+
+        for wing in [leftWing, rightWing] {
+            wing.removeAllAnimations()
+
+            // One slow, gentle stroke after the pop-in settles, then hold still.
+            let flapAngle: CGFloat = 11 * .pi / 180
+            let flap = CAKeyframeAnimation(keyPath: "transform.rotation.z")
+            flap.values = [0, flapAngle, 0]
+            flap.keyTimes = [0, 0.5, 1.0]
+            flap.duration = 0.6
+            flap.beginTime = flapStartTime
+            flap.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            flap.fillMode = .forwards
+            flap.isRemovedOnCompletion = false
+
+            let fadeIn = CABasicAnimation(keyPath: "opacity")
+            fadeIn.fromValue = 0
+            fadeIn.toValue = 1
+            fadeIn.duration = growDuration
+            fadeIn.fillMode = .forwards
+            fadeIn.isRemovedOnCompletion = false
+
+            let popIn = CASpringAnimation(keyPath: "transform.scale")
+            popIn.fromValue = 0.001
+            popIn.toValue = 1.0
+            popIn.mass = 0.7
+            popIn.stiffness = 180
+            popIn.damping = 13
+            popIn.duration = popIn.settlingDuration
+            popIn.fillMode = .forwards
+            popIn.isRemovedOnCompletion = false
+
+            let fadeOut = CABasicAnimation(keyPath: "opacity")
+            fadeOut.fromValue = 1
+            fadeOut.toValue = 0
+            fadeOut.beginTime = CACurrentMediaTime() + collapseDelay
+            fadeOut.duration = shrinkDuration
+            fadeOut.fillMode = .forwards
+            fadeOut.isRemovedOnCompletion = false
+
+            let popOut = CASpringAnimation(keyPath: "transform.scale")
+            popOut.fromValue = 1.0
+            popOut.toValue = 0.001
+            popOut.beginTime = CACurrentMediaTime() + collapseDelay
+            popOut.mass = 0.5
+            popOut.stiffness = 220
+            popOut.damping = 18
+            popOut.duration = popOut.settlingDuration
+            popOut.fillMode = .forwards
+            popOut.isRemovedOnCompletion = false
+
+            wing.add(fadeIn, forKey: "fadeIn")
+            wing.add(popIn, forKey: "popIn")
+            wing.add(flap, forKey: "flap")
+            wing.add(fadeOut, forKey: "fadeOut")
+            wing.add(popOut, forKey: "popOut")
         }
     }
 
-    private func startSteamAnimation() {
-        let duration: CFTimeInterval = 1.3
-
-        for (index, wisp) in steamWisps.enumerated() {
-            wisp.removeAllAnimations()
-            let delay = Double(index) * 0.35
-
-            let group = CAAnimationGroup()
-            group.duration = duration
-            group.repeatCount = 2
-            group.beginTime = CACurrentMediaTime() + delay
-
-            let rise = CABasicAnimation(keyPath: "transform.translation.y")
-            rise.fromValue = 0
-            rise.toValue = 4.0
-
-            let fade = CAKeyframeAnimation(keyPath: "opacity")
-            fade.values = [0, 0.65, 0.4, 0]
-            fade.keyTimes = [0, 0.25, 0.7, 1.0]
-
-            group.animations = [rise, fade]
-            group.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            wisp.add(group, forKey: "steam")
-        }
-    }
-
-    private func stopSteamAnimation() {
-        for wisp in steamWisps {
-            wisp.removeAllAnimations()
-            wisp.opacity = 0
+    private func hideWingsImmediately() {
+        for wing in [leftWing, rightWing] {
+            wing.removeAllAnimations()
+            wing.opacity = 0
+            wing.transform = CATransform3DMakeScale(0.001, 0.001, 1)
         }
     }
 
@@ -191,11 +273,8 @@ final class CoffeeIconView: NSView {
 
     private func updateImages() {
         let tint = currentTint()
-        outlineLayer.contents = symbolImage("cup.and.saucer", tint: tint)
-        fillLayer.contents = symbolImage("cup.and.saucer.fill", tint: tint)
-        for wisp in steamWisps {
-            wisp.strokeColor = tint.cgColor
-        }
+        outlineLayer.contents = canImage(tint: tint, filled: false)
+        fillLayer.contents = canImage(tint: tint, filled: true)
     }
 
     private func currentTint() -> NSColor {
@@ -206,15 +285,95 @@ final class CoffeeIconView: NSView {
         return color
     }
 
-    private func symbolImage(_ name: String, tint: NSColor) -> NSImage? {
-        let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
-        guard let base = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
-            .withSymbolConfiguration(config) else { return nil }
+    /// A drink-can silhouette — original artwork, not a reproduction of any real can's
+    /// logo or wordmark. The active/filled state uses a silver body with a single
+    /// diagonal blue stripe and a small abstract red/yellow color-block accent (no
+    /// figurative logo); the inactive/outline state is a plain monochrome template shape.
+    private func canImage(tint: NSColor, filled: Bool) -> NSImage? {
+        let size = NSSize(width: 16, height: 20)
 
-        return NSImage(size: base.size, flipped: false) { rect in
-            base.draw(in: rect)
-            tint.set()
-            rect.fill(using: .sourceAtop)
+        return NSImage(size: size, flipped: false) { rect in
+            // Slimmer body, closer to a real can's proportions.
+            let bodyInset: CGFloat = 3.0
+            let bodyRect = NSRect(
+                x: bodyInset,
+                y: 0.8,
+                width: rect.width - bodyInset * 2,
+                height: rect.height - 3.4
+            )
+            let body = NSBezierPath(roundedRect: bodyRect, xRadius: 1.1, yRadius: 1.1)
+
+            let lidRect = NSRect(
+                x: bodyInset - 0.3,
+                y: bodyRect.maxY - 0.55,
+                width: bodyRect.width + 0.6,
+                height: 1.8
+            )
+            let lid = NSBezierPath(ovalIn: lidRect)
+
+            let tab = NSBezierPath()
+            let tabCenter = NSPoint(x: rect.midX, y: lidRect.maxY - 0.75)
+            tab.appendOval(in: NSRect(x: tabCenter.x - 1.3, y: tabCenter.y - 0.55, width: 2.6, height: 1.1))
+
+            if filled {
+                NSGraphicsContext.saveGraphicsState()
+                body.setClip()
+
+                NSColor(calibratedWhite: 0.93, alpha: 1).set()
+                body.fill()
+
+                // Single diagonal blue stripe sweeping across the silver body.
+                let stripeCenter = NSPoint(x: bodyRect.midX, y: bodyRect.midY)
+                var stripeTransform = AffineTransform.identity
+                stripeTransform.translate(x: stripeCenter.x, y: stripeCenter.y)
+                stripeTransform.rotate(byDegrees: 22)
+                stripeTransform.translate(x: -stripeCenter.x, y: -stripeCenter.y)
+                let stripeRect = NSRect(
+                    x: bodyRect.midX - bodyRect.width * 0.42,
+                    y: bodyRect.minY - bodyRect.height * 0.3,
+                    width: bodyRect.width * 0.84,
+                    height: bodyRect.height * 1.6
+                )
+                let stripe = NSBezierPath(rect: stripeRect)
+                stripe.transform(using: stripeTransform)
+                NSColor(calibratedRed: 0.07, green: 0.17, blue: 0.46, alpha: 1).set()
+                stripe.fill()
+
+                // Small abstract red/yellow color-block accent, not a figurative logo.
+                let emblemY = bodyRect.minY + bodyRect.height * 0.47
+                let emblemCenter = NSPoint(x: bodyRect.midX, y: emblemY)
+                let yellowRadius: CGFloat = bodyRect.width * 0.24
+                NSColor(calibratedRed: 0.98, green: 0.78, blue: 0.1, alpha: 1).set()
+                NSBezierPath(ovalIn: NSRect(
+                    x: emblemCenter.x - yellowRadius, y: emblemCenter.y - yellowRadius * 0.6,
+                    width: yellowRadius * 2, height: yellowRadius * 1.2
+                )).fill()
+
+                NSColor(calibratedRed: 0.82, green: 0.13, blue: 0.13, alpha: 1).set()
+                let redRadius: CGFloat = bodyRect.width * 0.19
+                for dx: CGFloat in [-1, 1] {
+                    let cx = emblemCenter.x + dx * yellowRadius * 0.8
+                    NSBezierPath(ovalIn: NSRect(
+                        x: cx - redRadius, y: emblemCenter.y - redRadius * 0.5,
+                        width: redRadius * 2, height: redRadius * 1.0
+                    )).fill()
+                }
+
+                NSGraphicsContext.restoreGraphicsState()
+
+                NSColor(calibratedWhite: 0.86, alpha: 1).set()
+                lid.fill()
+                NSColor(calibratedWhite: 0.55, alpha: 1).set()
+                tab.fill()
+            } else {
+                tint.set()
+                body.lineWidth = 1.1
+                body.stroke()
+                lid.lineWidth = 1.0
+                lid.stroke()
+                tab.lineWidth = 0.9
+                tab.stroke()
+            }
             return true
         }
     }

@@ -10,7 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isActive: Bool { caffeinate?.isRunning ?? false }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        statusItem = NSStatusBar.system.statusItem(withLength: 26)
+        statusItem = NSStatusBar.system.statusItem(withLength: 32)
         statusItem.button?.action = #selector(handleClick)
         statusItem.button?.target = self
         statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
