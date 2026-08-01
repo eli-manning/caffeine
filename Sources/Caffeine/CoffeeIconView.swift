@@ -200,20 +200,24 @@ final class CoffeeIconView: NSView {
         popInTemplate.stiffness = 180
         popInTemplate.damping = 13
         let settleDuration = popInTemplate.settlingDuration
-        let collapseDelay = settleDuration + 0.6 + wingsHoldDuration
+        let flapDuration: CFTimeInterval = 1.1
+        let collapseDelay = settleDuration + flapDuration + wingsHoldDuration
         let flapStartTime = CACurrentMediaTime() + settleDuration
 
         for wing in [leftWing, rightWing] {
             wing.removeAllAnimations()
 
-            // One slow, gentle stroke after the pop-in settles, then hold still.
-            let flapAngle: CGFloat = 11 * .pi / 180
+            // One long, fluid stroke after the pop-in settles, then hold still.
+            // A gentle ease per segment (rather than one global curve) keeps the
+            // sweep from ever feeling like it snaps between keyframes.
+            let flapAngle: CGFloat = 13 * .pi / 180
+            let easeSegment = CAMediaTimingFunction(controlPoints: 0.45, 0, 0.55, 1)
             let flap = CAKeyframeAnimation(keyPath: "transform.rotation.z")
-            flap.values = [0, flapAngle, 0]
-            flap.keyTimes = [0, 0.5, 1.0]
-            flap.duration = 0.6
+            flap.values = [0, flapAngle, -flapAngle * 0.25, 0]
+            flap.keyTimes = [0, 0.45, 0.8, 1.0]
+            flap.timingFunctions = [easeSegment, easeSegment, easeSegment]
+            flap.duration = flapDuration
             flap.beginTime = flapStartTime
-            flap.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             flap.fillMode = .forwards
             flap.isRemovedOnCompletion = false
 
