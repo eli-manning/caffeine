@@ -30,6 +30,15 @@ final class CoffeeIconView: NSView {
             hideWingsImmediately()
             stopSteamAnimation()
             updateImages()
+            // positionWings()/positionSteamWisps() are gated on the current style and
+            // only otherwise run from layout(), which doesn't re-fire just because the
+            // style changed — without this, switching styles at runtime (e.g. via the
+            // Icon Style picker) leaves the newly-relevant layer with a stale/empty path.
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            positionWings()
+            positionSteamWisps()
+            CATransaction.commit()
         }
     }
 
