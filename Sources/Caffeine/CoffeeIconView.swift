@@ -33,6 +33,14 @@ final class CoffeeIconView: NSView {
         }
     }
 
+    /// Hover in/out, used to open the custom menu on hover. Tracked here
+    /// (rather than on the underlying NSStatusBarButton) because that button
+    /// is an AppKit-private control that manages its own tracking areas and
+    /// silently drops ones added from outside during its own layout passes.
+    var onHoverEnter: (() -> Void)?
+    var onHoverExit: (() -> Void)?
+    private var hoverTrackingArea: NSTrackingArea?
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
@@ -54,6 +62,27 @@ final class CoffeeIconView: NSView {
     required init?(coder: NSCoder) { fatalError("not supported") }
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTrackingArea { removeTrackingArea(hoverTrackingArea) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        hoverTrackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        onHoverEnter?()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        onHoverExit?()
+    }
 
     override func layout() {
         super.layout()

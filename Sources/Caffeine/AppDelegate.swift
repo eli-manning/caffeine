@@ -27,6 +27,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             iconView = CoffeeIconView(frame: button.bounds)
             iconView.autoresizingMask = [.width, .height]
             iconView.style = iconStyle
+            iconView.onHoverEnter = { [weak self] in self?.handleHoverEnter() }
+            iconView.onHoverExit = { [weak self] in self?.handleHoverExit() }
             button.addSubview(iconView)
         }
         updateIcon(animated: false)
@@ -44,11 +46,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func handleClick() {
         if NSApp.currentEvent?.type == .rightMouseUp {
-            showMenu()
+            presentCompactMenu()
         } else {
             isActive ? stop() : start()
             updateIcon(animated: true)
         }
+    }
+
+    // MARK: - Hover-to-open
+
+    private var pendingHoverShow: DispatchWorkItem?
+    private var pendingHoverHide: DispatchWorkItem?
+
+    private func handleHoverEnter() {
+        pendingHoverHide?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.presentFullMenu(hoverPresented: true) }
+        pendingHoverShow = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+    }
+
+    private func handleHoverExit() {
+        pendingHoverShow?.cancel()
+        scheduleHoverHide()
+    }
+
+    private func scheduleHoverHide() {
+        guard menuWindow.isHoverPresented else { return }
+        let work = DispatchWorkItem { [weak self] in self?.menuWindow.hide() }
+        pendingHoverHide = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
     }
 
     private func start() {
@@ -86,120 +112,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.setAccessibilityHelp("Click to toggle display sleep assertion")
     }
 
-    private func showMenu() {
-        let menu = NSMenu()
-        menu.autoenablesItems = false
+    /// Brands shown under "Get an Energy Drink" — each opens its own destination picker.
+    private let energyDrinkBrands = ["Red Bull", "Monster Energy", "Celsius", "Bang Energy", "Rockstar Energy"]
 
-        // Status header — custom view instead of a plain disabled text item.
-        let headerItem = NSMenuItem()
-        headerItem.isEnabled = false
-        let header = StatusHeaderView(frame: NSRect(x: 0, y: 0, width: 230, height: 40))
-        let detail: String
-        if isActive, let start = activeStartDate {
-            detail = "Active for \(formatDuration(Int(Date().timeIntervalSince(start))))"
-        } else {
-            detail = "Currently inactive"
+    private lazy var menuWindow: CustomMenuWindow = {
+        let window = CustomMenuWindow()
+        window.energyDrinkBrands = energyDrinkBrands
+        window.destinationsProvider = { [weak self] mapQuery, searchTerm in
+            self?.drinkDestinations(mapQuery: mapQuery, searchTerm: searchTerm) ?? []
         }
-        header.configure(title: "Caffeine", detail: detail, dotColor: isActive ? .systemGreen : .tertiaryLabelColor)
-        headerItem.view = header
-        menu.addItem(headerItem)
+        window.onOpenURL = { url in NSWorkspace.shared.open(url) }
+        window.onSelectIconStyle = { [weak self] style in
+            self?.iconStyle = style
+            self?.menuWindow.iconStyle = style
+        }
+        window.onToggleLaunchAtLogin = { [weak self] in
+            self?.toggleLaunchAtLogin()
+            if #available(macOS 13.0, *) {
+                self?.menuWindow.setLaunchAtLoginEnabled(SMAppService.mainApp.status == .enabled)
+            }
+        }
+        window.onQuit = { NSApp.terminate(nil) }
+        window.onClose = { [weak self] in self?.statusItem.button?.highlight(false) }
+        window.onHoverEnter = { [weak self] in self?.pendingHoverHide?.cancel() }
+        window.onHoverExit = { [weak self] in self?.scheduleHoverHide() }
+        return window
+    }()
 
-        menu.addItem(NSMenuItem.separator())
-
-        // Get an Energy Drink / Get a Coffee
-        let energyItem = NSMenuItem(title: "Get an Energy Drink", action: nil, keyEquivalent: "")
-        energyItem.image = symbolImage("bolt.fill")
-        energyItem.submenu = energyDrinkMenu()
-        menu.addItem(energyItem)
-
-        let coffeeItem = NSMenuItem(title: "Get a Coffee", action: nil, keyEquivalent: "")
-        coffeeItem.image = symbolImage("cup.and.saucer.fill")
-        coffeeItem.submenu = coffeeMenu()
-        menu.addItem(coffeeItem)
-
-        menu.addItem(NSMenuItem.separator())
-
-        // Icon Style
-        let styleItem = NSMenuItem(title: "Icon Style", action: nil, keyEquivalent: "")
-        styleItem.image = symbolImage("paintbrush.fill")
-        styleItem.submenu = iconStyleMenu()
-        menu.addItem(styleItem)
-
-        // Launch at Login Toggle
-        let loginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
-        loginItem.target = self
-        loginItem.image = symbolImage("power")
+    private func refreshMenuState() {
+        menuWindow.isActive = isActive
+        menuWindow.iconStyle = iconStyle
         if #available(macOS 13.0, *) {
-            loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+            menuWindow.launchAtLoginEnabled = SMAppService.mainApp.status == .enabled
         }
-        menu.addItem(loginItem)
-
-        menu.addItem(NSMenuItem.separator())
-
-        // Quit
-        let quitItem = NSMenuItem(title: "Quit Caffeine", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        quitItem.image = symbolImage("xmark.circle")
-        menu.addItem(quitItem)
-
-        self.statusItem.menu = menu
-        self.statusItem.button?.performClick(nil)
-        self.statusItem.menu = nil
+        menuWindow.activeDetail = ""
+        if isActive, let start = activeStartDate {
+            menuWindow.activeDetail = formatDuration(Int(Date().timeIntervalSince(start)))
+        }
     }
 
-    private func symbolImage(_ name: String) -> NSImage? {
-        let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .medium)
-        let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(config)
-        image?.isTemplate = true
-        return image
+    private func presentFullMenu(hoverPresented: Bool) {
+        guard let button = statusItem.button else { return }
+        refreshMenuState()
+        button.highlight(true)
+        menuWindow.present(relativeTo: button, mode: .full, hoverPresented: hoverPresented)
     }
 
-    // MARK: - Icon Style
-
-    private func iconStyleMenu() -> NSMenu {
-        let menu = NSMenu()
-
-        let coffeeItem = NSMenuItem(title: "Coffee", action: #selector(selectIconStyle(_:)), keyEquivalent: "")
-        coffeeItem.target = self
-        coffeeItem.tag = 0
-        coffeeItem.image = symbolImage("cup.and.saucer.fill")
-        coffeeItem.state = iconStyle == .coffee ? .on : .off
-        menu.addItem(coffeeItem)
-
-        let energyItem = NSMenuItem(title: "Energy Drink", action: #selector(selectIconStyle(_:)), keyEquivalent: "")
-        energyItem.target = self
-        energyItem.tag = 1
-        energyItem.image = symbolImage("bolt.fill")
-        energyItem.state = iconStyle == .energyDrink ? .on : .off
-        menu.addItem(energyItem)
-
-        return menu
-    }
-
-    @objc private func selectIconStyle(_ sender: NSMenuItem) {
-        iconStyle = sender.tag == 0 ? .coffee : .energyDrink
+    private func presentCompactMenu() {
+        guard let button = statusItem.button else { return }
+        refreshMenuState()
+        button.highlight(true)
+        menuWindow.present(relativeTo: button, mode: .compact, hoverPresented: false)
     }
 
     // MARK: - Get a Drink
-
-    /// Brands shown under "Get an Energy Drink" — each opens its own destination submenu.
-    private let energyDrinkBrands = ["Red Bull", "Monster Energy", "Celsius", "Bang Energy", "Rockstar Energy"]
-
-    private func energyDrinkMenu() -> NSMenu {
-        let menu = NSMenu()
-        for brand in energyDrinkBrands {
-            let item = NSMenuItem(title: brand, action: nil, keyEquivalent: "")
-            item.submenu = destinationMenu(
-                mapQuery: "gas station OR convenience store OR grocery store",
-                searchTerm: brand.lowercased()
-            )
-            menu.addItem(item)
-        }
-        return menu
-    }
-
-    private func coffeeMenu() -> NSMenu {
-        destinationMenu(mapQuery: "coffee shop", searchTerm: "coffee")
-    }
 
     /// Search-only destinations — no checkout automation, no order placement.
     /// DoorDash/Instacart don't publish a stable search API; these are
@@ -207,47 +173,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// site changes its URL structure. Maps searches places, not products, so
     /// `mapQuery` targets the kind of store that carries the drink rather than
     /// the drink itself.
-    private func destinationMenu(mapQuery: String, searchTerm: String) -> NSMenu {
-        let menu = NSMenu()
-
-        func addItem(_ title: String, symbol: String, url: URL?) {
-            let item = NSMenuItem(title: title, action: #selector(openDestination(_:)), keyEquivalent: "")
-            item.target = self
-            item.image = symbolImage(symbol)
-            item.representedObject = url
-            item.isEnabled = url != nil
-            menu.addItem(item)
-        }
-
+    private func drinkDestinations(mapQuery: String, searchTerm: String) -> [DrinkDestination] {
         var appleMaps = URLComponents(string: "maps://")!
         appleMaps.queryItems = [URLQueryItem(name: "q", value: mapQuery)]
-        addItem("Nearby Stores (Apple Maps)", symbol: "map.fill", url: appleMaps.url)
 
         var googleMaps = URLComponents(string: "https://www.google.com/maps/search/")!
         googleMaps.queryItems = [
             URLQueryItem(name: "api", value: "1"),
             URLQueryItem(name: "query", value: "\(mapQuery) near me"),
         ]
-        addItem("Nearby Stores (Google Maps)", symbol: "map", url: googleMaps.url)
-
-        menu.addItem(.separator())
 
         var doorDash = URLComponents()
         doorDash.scheme = "https"
         doorDash.host = "www.doordash.com"
         doorDash.path = "/search/store/\(searchTerm)/"
-        addItem("Find on DoorDash", symbol: "bag.fill", url: doorDash.url)
 
         var instacart = URLComponents(string: "https://www.instacart.com/store/s")!
         instacart.queryItems = [URLQueryItem(name: "k", value: searchTerm)]
-        addItem("Find on Instacart", symbol: "cart", url: instacart.url)
 
-        return menu
-    }
-
-    @objc private func openDestination(_ sender: NSMenuItem) {
-        guard let url = sender.representedObject as? URL else { return }
-        NSWorkspace.shared.open(url)
+        return [
+            DrinkDestination(title: "Nearby Stores (Apple Maps)", symbol: "map.fill", url: appleMaps.url),
+            DrinkDestination(title: "Nearby Stores (Google Maps)", symbol: "map", url: googleMaps.url),
+            DrinkDestination(title: "Find on DoorDash", symbol: "bag.fill", url: doorDash.url),
+            DrinkDestination(title: "Find on Instacart", symbol: "cart", url: instacart.url),
+        ]
     }
 
     @objc private func toggleLaunchAtLogin() {
