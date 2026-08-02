@@ -105,7 +105,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func updateIcon(animated: Bool) {
-        let description = isActive ? "Caffeine: Active (display awake)" : "Caffeine: Inactive"
+        let description = isActive ? "Caffeine Bar: Active (display awake)" : "Caffeine Bar: Inactive"
         iconView.setFilled(isActive, animated: animated)
         statusItem.button?.toolTip = description
         statusItem.button?.setAccessibilityLabel(description)

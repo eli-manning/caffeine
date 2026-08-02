@@ -282,7 +282,7 @@ final class CustomMenuWindow: NSPanel {
             ),
             MenuSeparatorView(),
             MenuRowView(
-                title: "Quit Caffeine",
+                title: "Quit Caffeine Bar",
                 symbolName: "xmark.circle.fill",
                 tint: .systemRed,
                 indent: 12,

@@ -15,7 +15,7 @@ final class StatusHeaderView: NSView {
 
         titleLabel.font = NSFont.systemFont(ofSize: 15, weight: .bold)
         titleLabel.textColor = .white
-        titleLabel.stringValue = "Caffeine"
+        titleLabel.stringValue = "Caffeine Bar"
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(titleLabel)
 

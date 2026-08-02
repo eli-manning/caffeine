@@ -1,8 +1,8 @@
-name: Caffeine
+name: CaffeineBar
 options:
   bundleIdPrefix: com.elimanning
 targets:
-  Caffeine:
+  CaffeineBar:
     type: application
     platform: macOS
     deploymentTarget: "13.0"
@@ -12,8 +12,8 @@ targets:
       - Resources/AppIcon.icns
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.elimanning.caffeine
-        PRODUCT_NAME: Caffeine
+        PRODUCT_BUNDLE_IDENTIFIER: com.elimanning.caffeinebar
+        PRODUCT_NAME: Caffeine Bar
         INFOPLIST_FILE: Resources/Info.plist
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: 6K4VZU48G9
