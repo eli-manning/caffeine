@@ -1,36 +1,55 @@
 import AppKit
 
-/// Custom header row for the right-click menu: a status dot plus a title/detail
-/// pair, standing in for the plain-text "☕ Caffeine: Active" item.
+/// Header row for the custom right-click menu: a bold brand title plus a
+/// colored status pill (e.g. "● ACTIVE · 12m"), replacing the plain-text
+/// "☕ Caffeine: Active" item and the old plain status dot.
 final class StatusHeaderView: NSView {
-    private let dot = NSView()
     private let titleLabel = NSTextField(labelWithString: "")
-    private let detailLabel = NSTextField(labelWithString: "")
+    private let pill = NSView()
+    private let pillLabel = NSTextField(labelWithString: "")
 
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
+    init() {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        heightAnchor.constraint(equalToConstant: 44).isActive = true
 
-        dot.wantsLayer = true
-        dot.layer?.cornerRadius = 4
-        dot.frame = NSRect(x: 14, y: frameRect.height / 2 - 4, width: 8, height: 8)
-        addSubview(dot)
-
-        titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
-        titleLabel.textColor = .labelColor
-        titleLabel.frame = NSRect(x: 30, y: frameRect.height / 2 - 1, width: frameRect.width - 40, height: 16)
+        titleLabel.font = NSFont.systemFont(ofSize: 15, weight: .bold)
+        titleLabel.textColor = .white
+        titleLabel.stringValue = "Caffeine"
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(titleLabel)
 
-        detailLabel.font = .systemFont(ofSize: 11, weight: .regular)
-        detailLabel.textColor = .secondaryLabelColor
-        detailLabel.frame = NSRect(x: 30, y: frameRect.height / 2 - 18, width: frameRect.width - 40, height: 14)
-        addSubview(detailLabel)
+        pill.wantsLayer = true
+        pill.layer?.cornerRadius = 8
+        pill.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(pill)
+
+        pillLabel.font = .systemFont(ofSize: 10, weight: .bold)
+        pillLabel.translatesAutoresizingMaskIntoConstraints = false
+        pill.addSubview(pillLabel)
+
+        NSLayoutConstraint.activate([
+            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 9),
+
+            pill.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            pill.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 5),
+            pill.heightAnchor.constraint(equalToConstant: 16),
+
+            pillLabel.leadingAnchor.constraint(equalTo: pill.leadingAnchor, constant: 7),
+            pillLabel.trailingAnchor.constraint(equalTo: pill.trailingAnchor, constant: -7),
+            pillLabel.centerYAnchor.constraint(equalTo: pill.centerYAnchor),
+        ])
     }
 
     required init?(coder: NSCoder) { fatalError("not supported") }
 
-    func configure(title: String, detail: String, dotColor: NSColor) {
-        titleLabel.stringValue = title
-        detailLabel.stringValue = detail
-        dot.layer?.backgroundColor = dotColor.cgColor
+    /// `duration` (e.g. "12m") is shown as-is, lowercase unit and all —
+    /// only the ACTIVE/INACTIVE word itself is a badge-style caps word.
+    func configure(active: Bool, duration: String) {
+        let color: NSColor = active ? NSColor(calibratedRed: 0.30, green: 0.85, blue: 0.45, alpha: 1) : .white
+        pill.layer?.backgroundColor = color.withAlphaComponent(active ? 0.18 : 0.1).cgColor
+        pillLabel.stringValue = active ? "ACTIVE · \(duration)" : "INACTIVE"
+        pillLabel.textColor = active ? color : .white.withAlphaComponent(0.5)
     }
 }
