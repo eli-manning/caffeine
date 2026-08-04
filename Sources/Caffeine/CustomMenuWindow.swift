@@ -36,17 +36,20 @@ final class CustomMenuWindow: NSPanel {
     private let coffeeTint = NSColor(calibratedRed: 0.72, green: 0.52, blue: 0.32, alpha: 1)
     private let styleTint = NSColor(calibratedRed: 0.66, green: 0.52, blue: 0.98, alpha: 1)
     private let loginTint = NSColor(calibratedRed: 0.35, green: 0.65, blue: 0.98, alpha: 1)
+    private let lidSleepTint = NSColor(calibratedRed: 0.40, green: 0.85, blue: 0.60, alpha: 1)
 
     var isActive = false
     var activeDetail = ""
     var iconStyle: IconStyle = .energyDrink
     var launchAtLoginEnabled = false
+    var preventSleepOnLidClose = false
     var energyDrinkBrands: [String] = []
     var destinationsProvider: (_ mapQuery: String, _ searchTerm: String) -> [DrinkDestination] = { _, _ in [] }
 
     var onOpenURL: ((URL) -> Void)?
     var onSelectIconStyle: ((IconStyle) -> Void)?
     var onToggleLaunchAtLogin: (() -> Void)?
+    var onTogglePreventSleepOnLidClose: (() -> Void)?
     var onQuit: (() -> Void)?
     var onClose: (() -> Void)?
 
@@ -279,6 +282,14 @@ final class CustomMenuWindow: NSPanel {
                 indent: 12,
                 accessory: .checkmark(selected: launchAtLoginEnabled),
                 onSelect: { [weak self] in self?.onToggleLaunchAtLogin?() }
+            ),
+            MenuRowView(
+                title: "Prevent Sleep on Lid Close",
+                symbolName: "laptopcomputer",
+                tint: lidSleepTint,
+                indent: 12,
+                accessory: .checkmark(selected: preventSleepOnLidClose),
+                onSelect: { [weak self] in self?.onTogglePreventSleepOnLidClose?() }
             ),
             MenuSeparatorView(),
             MenuRowView(

@@ -17,6 +17,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// When on, closing the lid won't sleep the Mac while Caffeine Bar is active — a
+    /// hardware-level lid-close sleep assertion that `caffeinate -d` alone doesn't cover.
+    /// Applied via `pmset -a disablesleep`, which needs admin privileges.
+    private var preventSleepOnLidClose: Bool {
+        get { UserDefaults.standard.bool(forKey: "preventSleepOnLidClose") }
+        set { UserDefaults.standard.set(newValue, forKey: "preventSleepOnLidClose") }
+    }
+
+    /// Tracks whether we're the ones currently holding `disablesleep 1`, so we only
+    /// ever issue the matching `disablesleep 0` we're responsible for.
+    private var lidSleepDisabled = false
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: 32)
         statusItem.button?.action = #selector(handleClick)
@@ -96,12 +108,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             caffeinate = nil
             activeStartDate = nil
         }
+        applyLidSleepState()
     }
 
     private func stop() {
         caffeinate?.terminate()
         caffeinate = nil
         activeStartDate = nil
+        applyLidSleepState()
+    }
+
+    /// Reconciles the `pmset disablesleep` assertion with whether it should currently
+    /// be on (active + the setting enabled). Safe to call any time either input changes.
+    private func applyLidSleepState() {
+        let shouldDisable = isActive && preventSleepOnLidClose
+        guard shouldDisable != lidSleepDisabled else { return }
+        lidSleepDisabled = shouldDisable
+        let script = "do shell script \"/usr/bin/pmset -a disablesleep \(shouldDisable ? 1 : 0)\" with administrator privileges"
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", script]
+        process.terminationHandler = { proc in
+            if proc.terminationStatus != 0 {
+                DispatchQueue.main.async { [weak self] in
+                    // The privileged command was cancelled or failed — don't leave our
+                    // bookkeeping claiming an assertion we don't actually hold.
+                    self?.lidSleepDisabled = !shouldDisable
+                }
+            }
+        }
+        do {
+            try process.run()
+        } catch {
+            lidSleepDisabled = !shouldDisable
+        }
     }
 
     private func updateIcon(animated: Bool) {
@@ -132,6 +172,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.menuWindow.setLaunchAtLoginEnabled(SMAppService.mainApp.status == .enabled)
             }
         }
+        window.onTogglePreventSleepOnLidClose = { [weak self] in
+            guard let self else { return }
+            self.preventSleepOnLidClose.toggle()
+            self.menuWindow.preventSleepOnLidClose = self.preventSleepOnLidClose
+            self.applyLidSleepState()
+        }
         window.onQuit = { NSApp.terminate(nil) }
         window.onClose = { [weak self] in self?.statusItem.button?.highlight(false) }
         window.onHoverEnter = { [weak self] in self?.pendingHoverHide?.cancel() }
@@ -142,6 +188,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func refreshMenuState() {
         menuWindow.isActive = isActive
         menuWindow.iconStyle = iconStyle
+        menuWindow.preventSleepOnLidClose = preventSleepOnLidClose
         if #available(macOS 13.0, *) {
             menuWindow.launchAtLoginEnabled = SMAppService.mainApp.status == .enabled
         }
