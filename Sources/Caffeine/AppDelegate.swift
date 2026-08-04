@@ -118,29 +118,92 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         applyLidSleepState()
     }
 
+    private let pmsetPath = "/usr/bin/pmset"
+    private let sudoersRulePath = "/etc/sudoers.d/caffeinebar"
+
     /// Reconciles the `pmset disablesleep` assertion with whether it should currently
     /// be on (active + the setting enabled). Safe to call any time either input changes.
     private func applyLidSleepState() {
         let shouldDisable = isActive && preventSleepOnLidClose
         guard shouldDisable != lidSleepDisabled else { return }
         lidSleepDisabled = shouldDisable
-        let script = "do shell script \"/usr/bin/pmset -a disablesleep \(shouldDisable ? 1 : 0)\" with administrator privileges"
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", script]
-        process.terminationHandler = { proc in
-            if proc.terminationStatus != 0 {
-                DispatchQueue.main.async { [weak self] in
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            let succeeded = self.setDisableSleep(shouldDisable)
+            if !succeeded {
+                DispatchQueue.main.async {
                     // The privileged command was cancelled or failed — don't leave our
                     // bookkeeping claiming an assertion we don't actually hold.
-                    self?.lidSleepDisabled = !shouldDisable
+                    self.lidSleepDisabled = !shouldDisable
                 }
             }
         }
+    }
+
+    /// Runs `pmset -a disablesleep <0|1>` as root. Tries passwordless `sudo` first (works
+    /// once `installPasswordlessSudoRule` has run); on macOS a fresh `disablesleep` change
+    /// otherwise triggers a password prompt from `do shell script ... with administrator
+    /// privileges` every single time, since that authorization only caches for a few minutes.
+    private func setDisableSleep(_ enable: Bool) -> Bool {
+        let value = enable ? "1" : "0"
+        let args = [pmsetPath, "-a", "disablesleep", value]
+
+        if runProcess("/usr/bin/sudo", ["-n"] + args) {
+            return true
+        }
+        if installPasswordlessSudoRule(), runProcess("/usr/bin/sudo", ["-n"] + args) {
+            return true
+        }
+        // Setup was declined or failed — fall back to a one-off privileged prompt so the
+        // toggle still works, just with a password prompt this time.
+        let script = "do shell script \"\(pmsetPath) -a disablesleep \(value)\" with administrator privileges"
+        return runProcess("/usr/bin/osascript", ["-e", script])
+    }
+
+    /// One-time setup: grants this user passwordless `sudo` for exactly the two
+    /// `pmset -a disablesleep 0/1` invocations (nothing broader), so future toggles of
+    /// "Prevent Sleep on Lid Close" don't prompt for a password. Shows a single admin
+    /// password prompt to write the rule; validates it with `visudo -c` before installing
+    /// so a malformed rule can never end up live in `/etc/sudoers.d`.
+    private func installPasswordlessSudoRule() -> Bool {
+        let username = NSUserName()
+        let rule = "\(username) ALL=(root) NOPASSWD: \(pmsetPath) -a disablesleep 1, \(pmsetPath) -a disablesleep 0"
+        let scriptContent = """
+        #!/bin/bash
+        set -e
+        TMP=$(mktemp)
+        echo "\(rule)" > "$TMP"
+        visudo -c -f "$TMP"
+        cp "$TMP" \(sudoersRulePath)
+        chmod 440 \(sudoersRulePath)
+        chown root:wheel \(sudoersRulePath)
+        rm -f "$TMP"
+        """
+        let scriptURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("caffeinebar-sudoers-setup-\(UUID().uuidString).sh")
+        do {
+            try scriptContent.write(to: scriptURL, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: scriptURL.path)
+        } catch {
+            return false
+        }
+        defer { try? FileManager.default.removeItem(at: scriptURL) }
+
+        let appleScript = "do shell script \"/bin/bash '\(scriptURL.path)'\" with administrator privileges"
+        return runProcess("/usr/bin/osascript", ["-e", appleScript])
+    }
+
+    @discardableResult
+    private func runProcess(_ path: String, _ arguments: [String]) -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: path)
+        process.arguments = arguments
         do {
             try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus == 0
         } catch {
-            lidSleepDisabled = !shouldDisable
+            return false
         }
     }
 
@@ -175,7 +238,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.onTogglePreventSleepOnLidClose = { [weak self] in
             guard let self else { return }
             self.preventSleepOnLidClose.toggle()
-            self.menuWindow.preventSleepOnLidClose = self.preventSleepOnLidClose
+            self.menuWindow.setPreventSleepOnLidClose(self.preventSleepOnLidClose)
             self.applyLidSleepState()
         }
         window.onQuit = { NSApp.terminate(nil) }

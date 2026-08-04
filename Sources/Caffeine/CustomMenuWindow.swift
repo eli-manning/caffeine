@@ -182,6 +182,11 @@ final class CustomMenuWindow: NSPanel {
         rebuild()
     }
 
+    func setPreventSleepOnLidClose(_ enabled: Bool) {
+        preventSleepOnLidClose = enabled
+        rebuild()
+    }
+
     override func resignKey() {
         super.resignKey()
         hide()
