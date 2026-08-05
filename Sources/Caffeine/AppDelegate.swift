@@ -278,9 +278,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Get a Drink
 
     /// Search-only destinations — no checkout automation, no order placement.
-    /// DoorDash/Instacart don't publish a stable search API; these are
-    /// best-effort URL patterns captured by hand and may break if either
-    /// site changes its URL structure. Maps searches places, not products, so
+    /// DoorDash/Instacart/Uber Eats don't publish a stable search API; these are
+    /// best-effort URL patterns captured by hand and may break if any of these
+    /// sites changes its URL structure. Uber Eats' search also has no location-free
+    /// "near me" URL, so without a delivery address already set it'll prompt for one
+    /// before showing results for `searchTerm`. Maps searches places, not products, so
     /// `mapQuery` targets the kind of store that carries the drink rather than
     /// the drink itself.
     private func drinkDestinations(mapQuery: String, searchTerm: String) -> [DrinkDestination] {
@@ -301,11 +303,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var instacart = URLComponents(string: "https://www.instacart.com/store/s")!
         instacart.queryItems = [URLQueryItem(name: "k", value: searchTerm)]
 
+        var uberEats = URLComponents(string: "https://www.ubereats.com/search")!
+        uberEats.queryItems = [URLQueryItem(name: "q", value: searchTerm)]
+
         return [
             DrinkDestination(title: "Nearby Stores (Apple Maps)", symbol: "map.fill", url: appleMaps.url),
             DrinkDestination(title: "Nearby Stores (Google Maps)", symbol: "map", url: googleMaps.url),
             DrinkDestination(title: "Find on DoorDash", symbol: "bag.fill", url: doorDash.url),
             DrinkDestination(title: "Find on Instacart", symbol: "cart", url: instacart.url),
+            DrinkDestination(title: "Find on Uber Eats", symbol: "bag", url: uberEats.url),
         ]
     }
 
